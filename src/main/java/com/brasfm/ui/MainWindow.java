@@ -5,6 +5,7 @@ import com.brasfm.model.enums.*;
 import com.brasfm.engine.*;
 import com.brasfm.championship.*;
 import com.brasfm.audio.SoundSystem;
+import com.brasfm.persistence.*;
 
 import javax.swing.*;
 import javax.swing.table.*;
@@ -40,6 +41,7 @@ public class MainWindow extends JFrame {
     private MatchEngine advancedEngine;
     private TeamGenerator teamGenerator;
     private SoundSystem soundSystem;
+    private GameSaveManager saveManager;
 
     public MainWindow() {
         super("BrasFM - O jogo para quem entende de futebol");
@@ -55,6 +57,7 @@ public class MainWindow extends JFrame {
 
         teamGenerator = new TeamGenerator();
         todosOsTimes = teamGenerator.gerarTimesBrasileiros();
+        saveManager = new GameSaveManager();
 
         // Configura janela
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -118,8 +121,8 @@ public class MainWindow extends JFrame {
                 { "📊", "Tabela" },
                 { "⚽", "Jogar" },
                 { "💰", "Finanças" },
-                { "📰", "Notícias" },
-                { "⚙️", "Opções" }
+                { "💾", "Salvar" },
+                { "📂", "Carregar" }
         };
 
         for (String[] btn : botoesMenu) {
@@ -148,6 +151,12 @@ public class MainWindow extends JFrame {
                         break;
                     case "Finanças":
                         mostrarFinancas();
+                        break;
+                    case "Salvar":
+                        salvarJogo();
+                        break;
+                    case "Carregar":
+                        carregarJogo();
                         break;
                 }
             });
@@ -721,9 +730,43 @@ public class MainWindow extends JFrame {
             // Mostra tela da partida
             mostrarPartida(meuJogo);
         } else {
-            // Simula rodada sem jogo do meu time
-            campeonato.simularRodada(proximaRodada);
-            mostrarTabela();
+            // Simula rodada sem jogo do meu time - usa SwingWorker para não congelar
+            final int rodada = proximaRodada;
+
+            // Mostra diálogo de progresso
+            JDialog dialogoProgresso = new JDialog(this, "Simulando...", false);
+            dialogoProgresso.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+            JPanel painelProgresso = new JPanel(new BorderLayout(10, 10));
+            painelProgresso.setBorder(BorderFactory.createEmptyBorder(20, 30, 20, 30));
+            painelProgresso.setBackground(COR_PAINEL);
+
+            JLabel lblMsg = new JLabel("Simulando rodada " + rodada + "...");
+            lblMsg.setForeground(COR_TEXTO);
+            JProgressBar progressBar = new JProgressBar();
+            progressBar.setIndeterminate(true);
+
+            painelProgresso.add(lblMsg, BorderLayout.NORTH);
+            painelProgresso.add(progressBar, BorderLayout.CENTER);
+            dialogoProgresso.add(painelProgresso);
+            dialogoProgresso.pack();
+            dialogoProgresso.setLocationRelativeTo(this);
+
+            SwingWorker<Void, Void> worker = new SwingWorker<>() {
+                @Override
+                protected Void doInBackground() {
+                    campeonato.simularRodada(rodada);
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    dialogoProgresso.dispose();
+                    mostrarTabela();
+                }
+            };
+
+            worker.execute();
+            dialogoProgresso.setVisible(true);
         }
     }
 
@@ -780,14 +823,40 @@ public class MainWindow extends JFrame {
         btnJogar.setMaximumSize(new Dimension(250, 50));
 
         btnJogar.addActionListener(e -> {
-            // Simula a partida
-            Match resultado = matchEngine.simular(jogo.getMandante(), jogo.getVisitante(), false);
+            // Desabilita botão durante simulação
+            btnJogar.setEnabled(false);
+            btnJogar.setText("Simulando...");
 
-            // Simula demais jogos da rodada
-            campeonato.simularRodada(campeonato.getRodadaAtual() + 1);
+            // Usa SwingWorker para não congelar a UI
+            SwingWorker<Match, Integer> worker = new SwingWorker<>() {
+                @Override
+                protected Match doInBackground() throws Exception {
+                    // Simula a partida do jogador
+                    Match resultado = matchEngine.simular(jogo.getMandante(), jogo.getVisitante(), false);
 
-            // Mostra resultado
-            mostrarResultado(resultado);
+                    // Simula demais jogos da rodada em background
+                    campeonato.simularRodada(campeonato.getRodadaAtual() + 1);
+
+                    return resultado;
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        Match resultado = get();
+                        // Mostra resultado na EDT
+                        mostrarResultado(resultado);
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(MainWindow.this,
+                                "Erro ao simular partida: " + ex.getMessage(),
+                                "Erro", JOptionPane.ERROR_MESSAGE);
+                        btnJogar.setEnabled(true);
+                        btnJogar.setText("⚽ JOGAR PARTIDA");
+                    }
+                }
+            };
+
+            worker.execute();
         });
 
         placar.add(btnJogar);
@@ -942,5 +1011,86 @@ public class MainWindow extends JFrame {
             MainWindow window = new MainWindow();
             window.setVisible(true);
         });
+    }
+
+    /**
+     * Salva o jogo atual em arquivo JSON.
+     */
+    private void salvarJogo() {
+        if (timeSelecionado == null || campeonato == null) {
+            JOptionPane.showMessageDialog(this,
+                    "Selecione um time e inicie o campeonato antes de salvar!",
+                    "Aviso",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        // Cria o SaveGame
+        SaveGame saveGame = new SaveGame(timeSelecionado, campeonato);
+
+        // Pergunta nome do save
+        String nome = JOptionPane.showInputDialog(this,
+                "Nome do save:",
+                "Salvar Jogo",
+                JOptionPane.PLAIN_MESSAGE);
+
+        if (nome != null && !nome.trim().isEmpty()) {
+            boolean sucesso = saveManager.save(saveGame, nome.trim());
+
+            if (sucesso) {
+                JOptionPane.showMessageDialog(this,
+                        "✅ Jogo salvo com sucesso!\n\nArquivo: saves/" + nome.trim() + ".json",
+                        "Jogo Salvo",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this,
+                        "❌ Erro ao salvar o jogo!",
+                        "Erro",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    /**
+     * Carrega um jogo salvo de arquivo JSON.
+     */
+    private void carregarJogo() {
+        JFileChooser fileChooser = new JFileChooser(saveManager.getSavesPath().toFile());
+        fileChooser.setDialogTitle("Carregar Jogo");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                "Save Files (*.json)", "json"));
+
+        int resultado = fileChooser.showOpenDialog(this);
+
+        if (resultado == JFileChooser.APPROVE_OPTION) {
+            java.io.File arquivo = fileChooser.getSelectedFile();
+            SaveGame saveGame = saveManager.load(arquivo);
+
+            if (saveGame != null) {
+                // Restaura o estado do jogo
+                this.timeSelecionado = saveGame.getTimeJogador();
+                this.campeonato = saveGame.getLiga();
+
+                // Atualiza lista de times a partir do campeonato carregado
+                if (campeonato != null) {
+                    this.todosOsTimes = campeonato.getTimes();
+                }
+
+                JOptionPane.showMessageDialog(this,
+                        "✅ Jogo carregado com sucesso!\n\n" +
+                                "Time: " + (timeSelecionado != null ? timeSelecionado.getNome() : "N/A") + "\n" +
+                                "Rodada: " + (campeonato != null ? campeonato.getRodadaAtual() : 0),
+                        "Jogo Carregado",
+                        JOptionPane.INFORMATION_MESSAGE);
+
+                // Atualiza a tela
+                mostrarTelaInicial();
+            } else {
+                JOptionPane.showMessageDialog(this,
+                        "❌ Erro ao carregar o jogo!\nVerifique se o arquivo é válido.",
+                        "Erro",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
     }
 }

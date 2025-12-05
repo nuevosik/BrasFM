@@ -1,6 +1,7 @@
 package com.brasfm;
 
 import com.brasfm.ui.MainWindow;
+import com.formdev.flatlaf.FlatDarkLaf;
 import javax.swing.*;
 
 /**
@@ -10,10 +11,9 @@ import javax.swing.*;
 public class Main {
 
     public static void main(String[] args) {
-        // Configura look and feel para melhor aparência
+        // Configura FlatLaf Dark para interface moderna
         try {
-            // Tenta usar o look and feel do sistema
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            FlatDarkLaf.setup();
 
             // Configurações adicionais para melhor aparência
             UIManager.put("Button.arc", 10);
@@ -21,7 +21,7 @@ public class Main {
             UIManager.put("TextComponent.arc", 10);
 
         } catch (Exception e) {
-            System.err.println("Aviso: Não foi possível configurar o look and feel: " + e.getMessage());
+            System.err.println("Aviso: Não foi possível configurar o FlatLaf: " + e.getMessage());
         }
 
         // Inicia a interface gráfica na thread do Swing
