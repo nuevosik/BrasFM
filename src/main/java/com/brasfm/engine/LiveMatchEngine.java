@@ -2,9 +2,11 @@ package com.brasfm.engine;
 
 import com.brasfm.model.Match;
 import com.brasfm.model.Team;
+import com.brasfm.model.Player;
 import javax.swing.Timer;
 import java.util.function.Consumer;
 import java.util.Random;
+import java.util.List;
 
 /**
  * Engine de partida ao vivo com callbacks para UI.
@@ -135,30 +137,115 @@ public class LiveMatchEngine {
     }
 
     /**
-     * Calcula a chance de gol atual baseada no momentum.
+     * Calcula a chance de gol usando duelos individuais por setor.
+     * Simula mini-duelos entre criação (atacante) vs defesa (defensor).
      */
     private double getChanceGol(boolean casaAtaca) {
-        double forcaCasa = mandante.getForcaTime();
-        double forcaFora = visitante.getForcaTime();
-        double totalForca = forcaCasa + forcaFora;
+        Team atacante = casaAtaca ? mandante : visitante;
+        Team defensor = casaAtaca ? visitante : mandante;
 
-        // Chance base proporcional à força
-        double chanceBase = casaAtaca ? (forcaCasa / totalForca) * chanceBaseGol
-                : (forcaFora / totalForca) * chanceBaseGol;
+        // 1. Qualidade do Meio-Campo (Criação de jogadas)
+        int criacao = calcularQualidadeSetor(atacante, "CRIACAO");
 
-        // Modificador de momentum (-50% a +50%)
-        double modMomentum = 0;
+        // 2. Qualidade Defensiva (Contenção)
+        int defesa = calcularQualidadeSetor(defensor, "DEFESA");
+
+        // 3. Qualidade de Finalização
+        int finalizacao = calcularQualidadeSetor(atacante, "FINALIZACAO");
+
+        // 4. Qualidade do Goleiro
+        int goleiro = calcularQualidadeSetor(defensor, "GOLEIRO");
+
+        // Chance de criar jogada: criação vs defesa
+        double chanceCriar = (double) criacao / (criacao + defesa);
+
+        // Chance de finalizar: finalização vs goleiro
+        double chanceFinalizar = (double) finalizacao / (finalizacao + goleiro);
+
+        // Bônus de momentum (até +20% se time está dominando)
+        double bonusMomentum = 0;
         if (casaAtaca && momentum > 0) {
-            modMomentum = (momentum / 100.0) * 0.5; // Até +50%
+            bonusMomentum = (momentum / 100.0) * 0.2;
         } else if (!casaAtaca && momentum < 0) {
-            modMomentum = (-momentum / 100.0) * 0.5; // Até +50%
+            bonusMomentum = (-momentum / 100.0) * 0.2;
         } else if (casaAtaca && momentum < 0) {
-            modMomentum = (momentum / 100.0) * 0.3; // Penalidade até -30%
+            bonusMomentum = (momentum / 100.0) * 0.15; // Penalidade
         } else if (!casaAtaca && momentum > 0) {
-            modMomentum = (-momentum / 100.0) * 0.3; // Penalidade até -30%
+            bonusMomentum = (-momentum / 100.0) * 0.15;
         }
 
-        return chanceBase * (1 + modMomentum);
+        // Bônus de mandante (fator casa) - atributos mentais
+        double bonusCasa = casaAtaca ? 1.03 : 1.0; // +3% para mandante
+
+        // Chance final: probabilidade de criar * probabilidade de finalizar * base
+        // Base de 5% por minuto, modificada pelos duelos
+        double chanceBase = 0.05;
+        double chanceFinal = chanceBase * chanceCriar * chanceFinalizar * (1 + bonusMomentum) * bonusCasa;
+
+        // Garante um limite razoável (0.5% a 5%)
+        return Math.max(0.005, Math.min(0.05, chanceFinal));
+    }
+
+    /**
+     * Calcula a qualidade de um setor baseada nos atributos dos jogadores
+     * titulares.
+     */
+    private int calcularQualidadeSetor(Team time, String setor) {
+        int soma = 0;
+        List<Player> titulares = time.getTitulares();
+
+        if (titulares == null || titulares.isEmpty()) {
+            return 50; // Valor padrão se não conseguir acessar
+        }
+
+        for (Player p : titulares) {
+            if (p == null || p.getPosicaoOriginal() == null)
+                continue;
+
+            switch (setor) {
+                case "CRIACAO":
+                    // Meio-campistas contribuem com passe e armação
+                    if (p.getPosicaoOriginal().name().contains("MEIA") ||
+                            p.getPosicaoOriginal().name().contains("VOLANTE")) {
+                        soma += p.getPasse() + p.getArmacao();
+                    }
+                    // Pontas também criam jogadas
+                    if (p.getPosicaoOriginal().name().contains("PONTA")) {
+                        soma += (p.getPasse() + p.getArmacao()) / 2;
+                    }
+                    break;
+
+                case "DEFESA":
+                    // Defensores contribuem com desarme e força
+                    if (p.getPosicaoOriginal().isDefensiva()) {
+                        soma += p.getDesarme() + p.getForca();
+                    }
+                    // Volante também ajuda na defesa
+                    if (p.getPosicaoOriginal().name().contains("VOLANTE")) {
+                        soma += p.getDesarme();
+                    }
+                    break;
+
+                case "FINALIZACAO":
+                    // Atacantes finalizam
+                    if (p.getPosicaoOriginal().isOfensiva()) {
+                        soma += p.getFinalizacaoEfetiva();
+                    }
+                    // Meias atacantes também
+                    if (p.getPosicaoOriginal().name().contains("MEIA_ATACANTE")) {
+                        soma += p.getFinalizacaoEfetiva() / 2;
+                    }
+                    break;
+
+                case "GOLEIRO":
+                    if (p.getPosicaoOriginal().isGoleiro()) {
+                        soma += p.getGoleiro() * 3; // Goleiro tem peso triplo
+                    }
+                    break;
+            }
+        }
+
+        return Math.max(1, soma); // Nunca zero
     }
 
     /**
